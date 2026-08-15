@@ -139,7 +139,7 @@ function buildResultPanel() {
 
   const intro = document.createElement('p');
   intro.className = 'hint';
-  intro.textContent = 'このアプリは音声の文字起こし・話者分離を行いません。別途取得した文字起こしテキストと、以下のプロンプトをAI(Claude等)に渡すことで、CC/CL発言を1分刻みで整理できます。';
+  intro.textContent = 'このアプリは音声の文字起こし・話者分離を行いません。録音した音声ファイルと、以下のプロンプトをAI(Claude等)に渡すことで、CC/CL発言を1分刻みで整理できます。';
   panel.appendChild(intro);
 
   const promptPre = document.createElement('pre');
