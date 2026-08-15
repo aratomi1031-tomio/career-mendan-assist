@@ -1,5 +1,9 @@
 // 振り返りインサイト生成。AIによる自然文要約ではなく、決まった閾値に基づく
 // 機械的なルールベース判定。閾値はここで一括管理し、後から調整しやすくする。
+//
+// フェーズ・チェックリストの構成は、そのセッション実施当時のスナップショット
+// （session.phaseConfigSnapshot / checklistConfigSnapshot、db.getSessionConfig経由）を使う。
+// 設定を後から変更しても、過去セッションの振り返り内容が変わらないようにするため。
 import * as db from './db.js';
 import { computeCompletionRate, isCriticalItemMissed } from './checklistManager.js';
 
@@ -25,9 +29,8 @@ function aggregatePhaseActuals(phaseLogs) {
 }
 
 export async function analyzeSession(sessionId) {
-  const [phaseConfig, checklistConfig, phaseLogs, checklistEvents] = await Promise.all([
-    db.getSetting('phaseConfig'),
-    db.getSetting('checklistConfig'),
+  const [{ phaseConfig, checklistConfig }, phaseLogs, checklistEvents] = await Promise.all([
+    db.getSessionConfig(sessionId),
     db.listPhaseLogs(sessionId),
     db.listChecklistEvents(sessionId),
   ]);
@@ -75,8 +78,9 @@ export async function analyzeSession(sessionId) {
   return [...criticalWarnings, ...insights];
 }
 
-async function computeSessionStats(sessionId, phaseConfig, checklistConfig) {
-  const [phaseLogs, checklistEvents] = await Promise.all([
+async function computeSessionStats(sessionId) {
+  const [{ phaseConfig, checklistConfig }, phaseLogs, checklistEvents] = await Promise.all([
+    db.getSessionConfig(sessionId),
     db.listPhaseLogs(sessionId),
     db.listChecklistEvents(sessionId),
   ]);
@@ -96,7 +100,7 @@ async function computeSessionStats(sessionId, phaseConfig, checklistConfig) {
 }
 
 export async function analyzeTrend(sessionId, lookbackN = TREND_LOOKBACK_N) {
-  const session = await db.getSession(sessionId);
+  const { session, phaseConfig } = await db.getSessionConfig(sessionId);
   const allSessions = await db.listSessions();
   const priorSessions = allSessions
     .filter((s) => s.status === 'completed' && s.id !== sessionId && s.startedAt < session.startedAt)
@@ -104,37 +108,36 @@ export async function analyzeTrend(sessionId, lookbackN = TREND_LOOKBACK_N) {
 
   if (priorSessions.length < MIN_PRIOR_SESSIONS_FOR_TREND) return [];
 
-  const [phaseConfig, checklistConfig] = await Promise.all([
-    db.getSetting('phaseConfig'),
-    db.getSetting('checklistConfig'),
-  ]);
-
-  const current = await computeSessionStats(sessionId, phaseConfig, checklistConfig);
-  const priorStats = await Promise.all(
-    priorSessions.map((s) => computeSessionStats(s.id, phaseConfig, checklistConfig))
-  );
+  const current = await computeSessionStats(sessionId);
+  const priorStats = await Promise.all(priorSessions.map((s) => computeSessionStats(s.id)));
 
   const trends = [];
 
+  // 過去セッションはフェーズ構成が異なる（設定変更前後をまたぐ）ことがあるため、
+  // そのフェーズキーのデータを持つ過去セッションだけを対象に平均を取る。
   for (const phase of phaseConfig) {
-    const ratios = priorStats.map((s) => s.perPhase[phase.key].ratio).filter((r) => r !== null);
-    const rates = priorStats.map((s) => s.perPhase[phase.key].rate);
-    const curRatio = current.perPhase[phase.key].ratio;
-    const curRate = current.perPhase[phase.key].rate;
+    const ratios = priorStats
+      .map((s) => s.perPhase[phase.key]?.ratio)
+      .filter((r) => r !== null && r !== undefined);
+    const rates = priorStats
+      .map((s) => s.perPhase[phase.key]?.rate)
+      .filter((r) => r !== undefined);
+    const curRatio = current.perPhase[phase.key]?.ratio;
+    const curRate = current.perPhase[phase.key]?.rate;
 
-    if (ratios.length > 0 && curRatio !== null) {
+    if (ratios.length > 0 && curRatio !== null && curRatio !== undefined) {
       const avgRatio = ratios.reduce((a, b) => a + b, 0) / ratios.length;
       if (Math.abs(curRatio - avgRatio) > TREND_RATIO_DELTA) {
         const direction = curRatio > avgRatio ? '長め' : '短め';
-        trends.push({ severity: 'info', text: `傾向: 『${phase.label}』フェーズの所要時間が直近${priorStats.length}回の平均より${direction}です。` });
+        trends.push({ severity: 'info', text: `傾向: 『${phase.label}』フェーズの所要時間が直近${ratios.length}回の平均より${direction}です。` });
       }
     }
 
-    if (rates.length > 0) {
+    if (rates.length > 0 && curRate !== undefined) {
       const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
       if (Math.abs(curRate - avgRate) > TREND_COMPLETION_DELTA) {
         const direction = curRate > avgRate ? '高め' : '低め';
-        trends.push({ severity: 'info', text: `傾向: 『${phase.label}』フェーズのチェック実施率が直近${priorStats.length}回の平均より${direction}です。` });
+        trends.push({ severity: 'info', text: `傾向: 『${phase.label}』フェーズのチェック実施率が直近${rates.length}回の平均より${direction}です。` });
       }
     }
   }

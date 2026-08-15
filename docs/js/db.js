@@ -98,6 +98,25 @@ export async function getSession(id) {
   return promisifyRequest(store.get(id));
 }
 
+// そのセッション実施当時のフェーズ・チェックリスト構成を返す。
+// セッション作成時に保存したスナップショットを優先し、無い場合（旧データ）は
+// 現在の設定にフォールバックする。設定画面での後からの変更が、過去セッションの
+// 表示内容を書き換えてしまわないようにするためのもの。
+export async function getSessionConfig(id) {
+  const session = await getSession(id);
+  if (!session) throw new Error(`session not found: ${id}`);
+  let { phaseConfigSnapshot: phaseConfig, checklistConfigSnapshot: checklistConfig } = session;
+  if (!phaseConfig || !checklistConfig) {
+    const [fallbackPhase, fallbackChecklist] = await Promise.all([
+      getSetting('phaseConfig'),
+      getSetting('checklistConfig'),
+    ]);
+    phaseConfig = phaseConfig || fallbackPhase;
+    checklistConfig = checklistConfig || fallbackChecklist;
+  }
+  return { session, phaseConfig, checklistConfig };
+}
+
 export async function deleteSession(id) {
   const db = await openDB();
   const t = tx(db, ['sessions', 'phaseLogs', 'checklistEvents', 'notes'], 'readwrite');

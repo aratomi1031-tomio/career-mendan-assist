@@ -23,10 +23,8 @@ function aggregatePhaseActuals(phaseLogs) {
 }
 
 export async function renderSessionSummary(container, sessionId, opts = {}) {
-  const [session, phaseConfig, checklistConfig, phaseLogs, checklistEvents, notes, insights, trends] = await Promise.all([
-    db.getSession(sessionId),
-    db.getSetting('phaseConfig'),
-    db.getSetting('checklistConfig'),
+  const [{ session, phaseConfig, checklistConfig }, phaseLogs, checklistEvents, notes, insights, trends] = await Promise.all([
+    db.getSessionConfig(sessionId),
     db.listPhaseLogs(sessionId),
     db.listChecklistEvents(sessionId),
     db.listNotes(sessionId),

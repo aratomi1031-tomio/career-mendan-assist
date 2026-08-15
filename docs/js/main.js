@@ -49,7 +49,22 @@ const startSessionBtn = document.getElementById('start-session-btn');
 consentCheckbox.addEventListener('change', () => {
   startSessionBtn.disabled = !consentCheckbox.checked;
 });
-startSessionBtn.addEventListener('click', () => startSession());
+
+let sessionStarting = false;
+startSessionBtn.addEventListener('click', async () => {
+  // 連打・二重タップで面談セッション（＝タイマー）が二重に始まってしまうのを防ぐ。
+  if (sessionStarting) return;
+  sessionStarting = true;
+  startSessionBtn.disabled = true;
+  try {
+    await startSession();
+  } finally {
+    sessionStarting = false;
+    // startSession()が「フェーズ未設定」等で早期リターンした場合に備え、
+    // ボタンが無効なまま固まらないよう同意チェックの状態に合わせて戻す。
+    startSessionBtn.disabled = !consentCheckbox.checked;
+  }
+});
 
 // ---- 面談中画面の要素 ----
 const totalTimeEl = document.getElementById('total-time');
@@ -87,6 +102,10 @@ async function startSession() {
     totalDurationMs: 0,
     recordingSaved: false,
     recordingSavedFileName: null,
+    // このセッション実施当時のフェーズ・チェックリスト構成を保存しておく。
+    // 後で設定画面を変更しても、このセッションの履歴・議事録・振り返りの内容は変わらない。
+    phaseConfigSnapshot: phaseConfig,
+    checklistConfigSnapshot: checklistConfig,
   });
 
   const timer = new TimerEngine(onTick);
@@ -108,10 +127,9 @@ async function startSession() {
 
   showScreen('live');
   timer.start();
+  // phaseManager.start()はonPhaseChange経由でresetVisit/renderPhaseButtons/renderChecklistを呼ぶため、
+  // ここで重ねて呼ぶ必要はない。
   await phaseManager.start();
-  checklistManager.resetVisit();
-  renderPhaseButtons();
-  renderChecklist();
 }
 
 function onTick({ elapsedTotalMs, elapsedPhaseMs }) {
@@ -189,78 +207,106 @@ async function submitNote() {
 }
 
 recordBtn.addEventListener('click', async () => {
-  if (!session.isRecording) {
-    try {
-      await session.recorder.requestMicPermission();
-      session.recorder.startRecording();
-      session.isRecording = true;
-      recordBtn.textContent = '■ 録音停止';
-      recordIndicator.hidden = false;
-      saveRecordingBtn.hidden = true;
-    } catch (err) {
-      alert('マイクの利用許可が得られませんでした: ' + err.message);
+  // マイク許可待ち・停止処理待ちの間に連打されると、録音が二重に始まったり
+  // 二重に停止処理されたりするおそれがあるため、処理中はボタンを無効化する。
+  recordBtn.disabled = true;
+  try {
+    if (!session.isRecording) {
+      try {
+        await session.recorder.requestMicPermission();
+        session.recorder.startRecording();
+        session.isRecording = true;
+        recordBtn.textContent = '■ 録音停止';
+        recordIndicator.hidden = false;
+        saveRecordingBtn.hidden = true;
+        recordBtn.disabled = false;
+      } catch (err) {
+        alert('マイクの利用許可が得られませんでした: ' + err.message);
+        recordBtn.disabled = false;
+      }
+    } else {
+      const blob = await session.recorder.stopRecording();
+      session.isRecording = false;
+      session.pendingBlob = blob;
+      session.hasUnsavedBlob = true;
+      recordBtn.textContent = '● 録音開始';
+      recordIndicator.hidden = true;
+      saveRecordingBtn.hidden = false;
+      // 1セッションにつき録音は1回のみのため、停止後はボタンを無効のままにする。
     }
-  } else {
-    const blob = await session.recorder.stopRecording();
-    session.isRecording = false;
-    session.pendingBlob = blob;
-    session.hasUnsavedBlob = true;
-    recordBtn.textContent = '● 録音開始';
-    recordBtn.disabled = true; // 1セッション1回のみ
-    recordIndicator.hidden = true;
-    saveRecordingBtn.hidden = false;
+  } catch (err) {
+    alert('録音処理でエラーが発生しました: ' + err.message);
+    recordBtn.disabled = false;
   }
 });
 
 saveRecordingBtn.addEventListener('click', async () => {
-  const result = await session.recorder.saveRecording(session.pendingBlob, session.recorder.suggestedFileName());
-  if (result.method === 'cancelled') return;
-  session.recordingSaved = true;
-  session.recordingSavedFileName = result.fileName;
-  session.hasUnsavedBlob = false;
-  saveRecordingBtn.hidden = true;
-  alert('録音を保存しました。');
+  // 保存処理は非同期（保存先選択ダイアログ待ち）なので、連打すると同じ録音を
+  // 二重に保存しようとしてしまう。処理中はボタンを無効化して防ぐ。
+  saveRecordingBtn.disabled = true;
+  try {
+    const result = await session.recorder.saveRecording(session.pendingBlob, session.recorder.suggestedFileName());
+    if (result.method === 'cancelled') return;
+    session.recordingSaved = true;
+    session.recordingSavedFileName = result.fileName;
+    session.hasUnsavedBlob = false;
+    saveRecordingBtn.hidden = true;
+    alert('録音を保存しました。');
+  } catch (err) {
+    alert('録音の保存に失敗しました。もう一度お試しください: ' + err.message);
+  } finally {
+    saveRecordingBtn.disabled = false;
+  }
 });
 
 endSessionBtn.addEventListener('click', async () => {
   if (!confirm('面談を終了します。よろしいですか？')) return;
 
-  if (session.isRecording) {
-    const blob = await session.recorder.stopRecording();
-    session.isRecording = false;
-    session.pendingBlob = blob;
-    session.hasUnsavedBlob = true;
-  }
+  try {
+    if (session.isRecording) {
+      const blob = await session.recorder.stopRecording();
+      session.isRecording = false;
+      session.pendingBlob = blob;
+      session.hasUnsavedBlob = true;
+    }
 
-  if (session.hasUnsavedBlob) {
-    if (confirm('録音データがまだ保存されていません。保存しますか？（「いいえ」を選ぶと録音データは破棄されます）')) {
-      const result = await session.recorder.saveRecording(session.pendingBlob, session.recorder.suggestedFileName());
-      if (result.method !== 'cancelled') {
-        session.recordingSaved = true;
-        session.recordingSavedFileName = result.fileName;
+    if (session.hasUnsavedBlob) {
+      if (confirm('録音データがまだ保存されていません。保存しますか？（「いいえ」を選ぶと録音データは破棄されます）')) {
+        try {
+          const result = await session.recorder.saveRecording(session.pendingBlob, session.recorder.suggestedFileName());
+          if (result.method !== 'cancelled') {
+            session.recordingSaved = true;
+            session.recordingSavedFileName = result.fileName;
+          }
+        } catch (err) {
+          alert('録音の保存に失敗しました。録音データは保存されませんでした: ' + err.message);
+        }
       }
     }
+
+    // マイク解放とタイマー停止は、この後の処理でエラーが起きても必ず済ませておく。
+    session.recorder.releaseMic();
+    session.timer.stop();
+    await session.phaseManager.finish();
+
+    const totalDurationMs = session.timer.getElapsedTotalMs();
+    await db.updateSession(session.id, {
+      endedAt: Date.now(),
+      status: 'completed',
+      totalDurationMs,
+      recordingSaved: session.recordingSaved,
+      recordingSavedFileName: session.recordingSavedFileName,
+    });
+
+    const sessionId = session.id;
+    showScreen('summary');
+    const summaryContainer = document.getElementById('summary-container');
+    summaryContainer.innerHTML = '読み込み中…';
+    await renderSessionSummary(summaryContainer, sessionId, { readOnly: false });
+    session = null;
+  } catch (err) {
+    alert('面談の終了処理中にエラーが発生しました。記録は保存できていない可能性があります。お手数ですが画面を再読み込みしてください: ' + err.message);
   }
-
-  session.recorder.releaseMic();
-  session.timer.stop();
-  await session.phaseManager.finish();
-
-  const totalDurationMs = session.timer.getElapsedTotalMs();
-  await db.updateSession(session.id, {
-    endedAt: Date.now(),
-    status: 'completed',
-    totalDurationMs,
-    recordingSaved: session.recordingSaved,
-    recordingSavedFileName: session.recordingSavedFileName,
-  });
-
-  const sessionId = session.id;
-  showScreen('summary');
-  const summaryContainer = document.getElementById('summary-container');
-  summaryContainer.innerHTML = '読み込み中…';
-  await renderSessionSummary(summaryContainer, sessionId, { readOnly: false });
-  session = null;
 });
 
 document.getElementById('new-session-btn').addEventListener('click', () => {

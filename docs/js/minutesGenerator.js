@@ -1,7 +1,11 @@
 // 議事録ドラフトのMarkdown生成。記録された構造化データのみから機械的に組み立てる
 // （AIによる自然文要約ではない。最終的な確認・編集は人手で行うことを前提とする）。
+//
+// フェーズ・チェックリストの構成は、そのセッション実施当時のスナップショット
+// （session.phaseConfigSnapshot / checklistConfigSnapshot）を使う。設定画面で
+// 後からフェーズ名や項目を変更しても、過去の議事録の内容が変わってしまわないようにするため。
 import * as db from './db.js';
-import { computeCompletionRate, isCriticalItemMissed } from './checklistManager.js';
+import { computeCompletionRate } from './checklistManager.js';
 import { analyzeSession, analyzeTrend } from './reflectionEngine.js';
 import { formatMs } from './timer.js';
 import { saveTextFile } from './fileSave.js';
@@ -23,10 +27,8 @@ function formatDateTime(ts) {
 }
 
 export async function buildMinutes(sessionId) {
-  const [session, phaseConfig, checklistConfig, phaseLogs, checklistEvents, notes, insights, trends] = await Promise.all([
-    db.getSession(sessionId),
-    db.getSetting('phaseConfig'),
-    db.getSetting('checklistConfig'),
+  const [{ session, phaseConfig, checklistConfig }, phaseLogs, checklistEvents, notes, insights, trends] = await Promise.all([
+    db.getSessionConfig(sessionId),
     db.listPhaseLogs(sessionId),
     db.listChecklistEvents(sessionId),
     db.listNotes(sessionId),
@@ -58,65 +60,43 @@ export async function buildMinutes(sessionId) {
   }
   lines.push('');
 
-  function notesForPhase(phaseKey) {
-    return notes.filter((n) => n.phaseKey === phaseKey);
-  }
-
-  function renderNotesSection(title, phaseKeys, criticalCheckLabel) {
-    lines.push(`## ${title}`);
-    lines.push('');
-    const relevant = phaseKeys.flatMap((k) => notesForPhase(k));
-    if (relevant.length === 0) {
+  lines.push(`## フェーズ別の記録`);
+  lines.push('');
+  for (const phase of phaseConfig) {
+    lines.push(`### ${phase.label}`);
+    const phaseNotes = notes
+      .filter((n) => n.phaseKey === phase.key)
+      .sort((a, b) => a.elapsedMsTotal - b.elapsedMsTotal);
+    if (phaseNotes.length === 0) {
       lines.push('（記録されたメモはありません）');
     } else {
-      for (const n of relevant.sort((a, b) => a.elapsedMsTotal - b.elapsedMsTotal)) {
-        lines.push(`- [${formatMs(n.elapsedMsTotal)}] ${n.text}`);
-      }
+      for (const n of phaseNotes) lines.push(`- [${formatMs(n.elapsedMsTotal)}] ${n.text}`);
     }
-    if (criticalCheckLabel) {
-      const { phaseKey, itemKey, label } = criticalCheckLabel;
-      const missed = isCriticalItemMissed(checklistConfig, checklistEvents, phaseKey, itemKey);
+
+    const items = checklistConfig[phase.key] || [];
+    if (items.length > 0) {
+      const comp = computeCompletionRate(checklistConfig, checklistEvents, phase.key);
       lines.push('');
-      lines.push(`${label}: ${missed ? '❌ 未実施' : '✅ 実施済み'}`);
+      lines.push(`チェック実施: ${comp.checked}/${comp.total}`);
+      const checkedKeys = new Set(
+        checklistEvents.filter((e) => e.phaseKey === phase.key).map((e) => e.itemKey)
+      );
+      const criticalItems = items.filter((i) => i.critical);
+      if (criticalItems.length > 0) {
+        for (const ci of criticalItems) {
+          lines.push(`- ${checkedKeys.has(ci.key) ? '✅' : '❌'} ${ci.label}`);
+        }
+      }
     }
     lines.push('');
   }
-
-  const assessmentCritical = (checklistConfig.assessment || []).find((i) => i.critical);
-  renderNotesSection(
-    '相談者の状況・課題',
-    ['assessment'],
-    assessmentCritical ? { phaseKey: 'assessment', itemKey: assessmentCritical.key, label: '課題確認チェック' } : null
-  );
-
-  const goalCritical = (checklistConfig.goalsetting || []).find((i) => i.critical);
-  renderNotesSection(
-    '目標（ありたい姿）',
-    ['goalsetting'],
-    goalCritical ? { phaseKey: 'goalsetting', itemKey: goalCritical.key, label: 'ありたい姿確認チェック' } : null
-  );
-
-  renderNotesSection('方策・次のアクション', ['action'], null);
-
-  lines.push(`## チェックリスト実施状況`);
-  lines.push('');
-  lines.push('| フェーズ | 実施率 |');
-  lines.push('|---|---|');
-  for (const phase of phaseConfig) {
-    const comp = computeCompletionRate(checklistConfig, checklistEvents, phase.key);
-    lines.push(`| ${phase.label} | ${comp.checked}/${comp.total} |`);
-  }
-  lines.push('');
 
   lines.push(`## 次回に向けて`);
   lines.push('');
-  const evalNotes = notesForPhase('evaluation');
-  if (evalNotes.length > 0) {
-    for (const n of evalNotes) lines.push(`- [${formatMs(n.elapsedMsTotal)}] ${n.text}`);
-  }
   const warnItems = insights.filter((i) => i.severity === 'warn');
-  for (const w of warnItems) lines.push(`- ${w.text}`);
-  if (evalNotes.length === 0 && warnItems.length === 0) {
+  if (warnItems.length > 0) {
+    for (const w of warnItems) lines.push(`- ${w.text}`);
+  } else {
     lines.push('（特記事項なし）');
   }
   lines.push('');

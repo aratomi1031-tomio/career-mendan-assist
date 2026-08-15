@@ -8,6 +8,8 @@ export class TimerEngine {
   }
 
   start() {
+    // すでに動いているインターバルがあれば止めてから開始する（二重start対策）。
+    this.stop();
     this._sessionStart = performance.now();
     this._phaseStart = this._sessionStart;
     this._intervalId = setInterval(() => this._tick(), 500);

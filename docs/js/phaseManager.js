@@ -10,6 +10,7 @@ export class PhaseManager {
     this.onPhaseChange = onPhaseChange || (() => {});
     this.currentIndex = 0;
     this.currentLogId = null;
+    this._switching = false;
   }
 
   getCurrentPhase() {
@@ -23,13 +24,22 @@ export class PhaseManager {
   }
 
   async switchPhase(phaseKey) {
+    // 切り替え処理（DB書き込みを挟む非同期処理）の最中に別のフェーズボタンを
+    // 連打されると、ログの開閉やcurrentIndexの更新が競合してしまうため、
+    // 処理中の呼び出しは無視する。
+    if (this._switching) return;
     const idx = this.phases.findIndex((p) => p.key === phaseKey);
     if (idx === -1 || idx === this.currentIndex) return;
-    await this._closeCurrentLog();
-    this.currentIndex = idx;
-    this.timer.restartPhaseClock();
-    await this._openLog(this.getCurrentPhase());
-    this.onPhaseChange(this.getCurrentPhase());
+    this._switching = true;
+    try {
+      await this._closeCurrentLog();
+      this.currentIndex = idx;
+      this.timer.restartPhaseClock();
+      await this._openLog(this.getCurrentPhase());
+      this.onPhaseChange(this.getCurrentPhase());
+    } finally {
+      this._switching = false;
+    }
   }
 
   async finish() {
