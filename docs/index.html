@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>キャリア面談アシスト</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>キャリア面談アシスト</h1>
+      <nav id="main-nav">
+        <button class="nav-btn active" data-nav="start">面談準備</button>
+        <button class="nav-btn" data-nav="history">履歴</button>
+        <button class="nav-btn" data-nav="settings">設定</button>
+      </nav>
+    </header>
+
+    <main>
+      <section id="screen-start" class="screen">
+        <h2>面談を開始</h2>
+        <label class="consent-check">
+          <input type="checkbox" id="consent-checkbox">
+          相談者から録音・記録についての同意を得ています
+        </label>
+        <button id="start-session-btn" class="btn-primary" disabled>面談を開始する</button>
+        <p class="hint">開始すると、全体タイマーと最初のフェーズが始まります。フェーズ構成やチェック項目は「設定」からいつでも編集できます。</p>
+        <p class="hint">録音データは常にこのPC内にのみ保存され、外部には一切送信されません。</p>
+      </section>
+
+      <section id="screen-live" class="screen" hidden>
+        <div class="live-top">
+          <div class="timer-total">
+            <span class="label">面談全体</span>
+            <span id="total-time" class="time-display">00:00</span>
+          </div>
+          <div class="recording-controls">
+            <button id="record-btn" class="btn-secondary">● 録音開始</button>
+            <span id="record-indicator" class="record-indicator" hidden>● 録音中</span>
+            <button id="save-recording-btn" class="btn-secondary" hidden>録音を保存</button>
+          </div>
+        </div>
+
+        <div class="phase-panel">
+          <div class="phase-buttons" id="phase-buttons"></div>
+          <div class="current-phase-info">
+            <span id="current-phase-label" class="phase-label"></span>
+            <span id="phase-time" class="time-display">00:00</span>
+            <span id="phase-target" class="phase-target"></span>
+          </div>
+          <div class="progress-bar-track">
+            <div id="phase-progress-bar" class="progress-bar-fill"></div>
+          </div>
+        </div>
+
+        <div class="checklist-panel">
+          <h3>共通スキルチェック（このフェーズ）</h3>
+          <div id="checklist-items"></div>
+        </div>
+
+        <div class="notes-panel">
+          <h3>メモ</h3>
+          <div class="notes-input-row">
+            <input type="text" id="note-input" placeholder="気づいたことを一言メモ...">
+            <button id="add-note-btn" class="btn-secondary">追加</button>
+          </div>
+          <ul id="notes-list" class="notes-list"></ul>
+        </div>
+
+        <button id="end-session-btn" class="btn-danger end-btn">面談を終了する</button>
+      </section>
+
+      <section id="screen-summary" class="screen" hidden>
+        <h2>面談サマリー</h2>
+        <div id="summary-container"></div>
+        <button id="new-session-btn" class="btn-primary">新しい面談を始める</button>
+      </section>
+
+      <section id="screen-history" class="screen" hidden>
+        <h2>面談履歴</h2>
+        <div id="history-container"></div>
+      </section>
+
+      <section id="screen-settings" class="screen" hidden>
+        <h2>設定</h2>
+        <div id="settings-container"></div>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
