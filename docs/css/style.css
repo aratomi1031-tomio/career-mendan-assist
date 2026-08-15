@@ -49,6 +49,10 @@ header h1 {
   gap: 8px;
 }
 
+/* #main-navはID指定のためbrowser既定の[hidden]{display:none}より優先されてしまい、
+   このルールが無いとmainNav.hidden=trueをJSでセットしても実際には非表示にならない。 */
+#main-nav[hidden] { display: none; }
+
 .nav-btn {
   background: none;
   border: 1px solid var(--color-border);
@@ -366,6 +370,9 @@ button {
 .history-detail {
   margin-top: 20px;
 }
+
+.history-status-completed { color: var(--color-text-muted); }
+.history-status-incomplete { color: var(--color-yellow); font-weight: 600; }
 
 /* ---- 設定画面 ---- */
 .settings-intro {

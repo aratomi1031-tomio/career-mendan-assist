@@ -33,7 +33,14 @@ export class HistoryView {
 
       const info = document.createElement('div');
       info.className = 'history-row-info';
-      info.innerHTML = `<strong>${formatDateTime(s.startedAt)}</strong> — ${s.status === 'completed' ? '完了' : '未完了'} / ${formatMs(s.totalDurationMs || 0)}`;
+      const statusLabel = s.status === 'completed' ? '完了' : '未完了（途中で終了）';
+      const statusClass = s.status === 'completed' ? 'history-status-completed' : 'history-status-incomplete';
+      // 未完了セッションはtotalDurationMsが0のまま記録されている場合があるため、
+      // 「0秒の面談だった」と誤解されないよう文言を分ける。
+      const durationLabel = (s.status === 'completed' || s.totalDurationMs > 0)
+        ? formatMs(s.totalDurationMs || 0)
+        : '時間の記録なし';
+      info.innerHTML = `<strong>${formatDateTime(s.startedAt)}</strong> — <span class="${statusClass}">${statusLabel}</span> / ${durationLabel}`;
       row.appendChild(info);
 
       const btnRow = document.createElement('div');

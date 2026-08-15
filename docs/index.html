@@ -36,9 +36,8 @@
             <span id="total-time" class="time-display">00:00</span>
           </div>
           <div class="recording-controls">
-            <button id="record-btn" class="btn-secondary">● 録音開始</button>
             <span id="record-indicator" class="record-indicator" hidden>● 録音中</span>
-            <button id="save-recording-btn" class="btn-secondary" hidden>録音を保存</button>
+            <span id="record-fallback-indicator" class="hint" hidden>録音なし（マイク未許可のため続行中）</span>
           </div>
         </div>
 
@@ -74,7 +73,6 @@
       <section id="screen-summary" class="screen" hidden>
         <h2>面談サマリー</h2>
         <div id="summary-container"></div>
-        <button id="new-session-btn" class="btn-primary">新しい面談を始める</button>
       </section>
 
       <section id="screen-history" class="screen" hidden>
