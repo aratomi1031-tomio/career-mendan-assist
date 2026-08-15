@@ -259,8 +259,14 @@ saveRecordingBtn.addEventListener('click', async () => {
   }
 });
 
+let sessionEnding = false;
 endSessionBtn.addEventListener('click', async () => {
   if (!confirm('面談を終了します。よろしいですか？')) return;
+  // confirm()通過後は非同期処理（録音停止・保存・DB更新）が続くため、その間に
+  // 再度クリック＆確認されると、session がnull化された後にアクセスして
+  // エラーになったり、終了処理が二重に走ったりする。処理中は無視する。
+  if (sessionEnding) return;
+  sessionEnding = true;
 
   try {
     if (session.isRecording) {
@@ -306,6 +312,8 @@ endSessionBtn.addEventListener('click', async () => {
     session = null;
   } catch (err) {
     alert('面談の終了処理中にエラーが発生しました。記録は保存できていない可能性があります。お手数ですが画面を再読み込みしてください: ' + err.message);
+  } finally {
+    sessionEnding = false;
   }
 });
 

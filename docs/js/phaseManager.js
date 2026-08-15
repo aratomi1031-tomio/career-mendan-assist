@@ -10,7 +10,11 @@ export class PhaseManager {
     this.onPhaseChange = onPhaseChange || (() => {});
     this.currentIndex = 0;
     this.currentLogId = null;
-    this._switching = false;
+    // フェーズ切替・面談終了はいずれもcurrentLogIdを読み書きする非同期処理なので、
+    // このキューを介して直列実行する。連打や「切替中に終了ボタン」のような組み合わせで
+    // ログの開閉が競合するのを防ぐ（単純な処理中フラグだと、切替中に来た次の指示を
+    // 無視するだけで、例えばB→Cと素早く連打した場合にCへの遷移が失われてしまう）。
+    this._queue = Promise.resolve();
   }
 
   getCurrentPhase() {
@@ -23,27 +27,28 @@ export class PhaseManager {
     this.onPhaseChange(this.getCurrentPhase());
   }
 
-  async switchPhase(phaseKey) {
-    // 切り替え処理（DB書き込みを挟む非同期処理）の最中に別のフェーズボタンを
-    // 連打されると、ログの開閉やcurrentIndexの更新が競合してしまうため、
-    // 処理中の呼び出しは無視する。
-    if (this._switching) return;
-    const idx = this.phases.findIndex((p) => p.key === phaseKey);
-    if (idx === -1 || idx === this.currentIndex) return;
-    this._switching = true;
-    try {
+  switchPhase(phaseKey) {
+    return this._enqueue(async () => {
+      const idx = this.phases.findIndex((p) => p.key === phaseKey);
+      if (idx === -1 || idx === this.currentIndex) return;
       await this._closeCurrentLog();
       this.currentIndex = idx;
       this.timer.restartPhaseClock();
       await this._openLog(this.getCurrentPhase());
       this.onPhaseChange(this.getCurrentPhase());
-    } finally {
-      this._switching = false;
-    }
+    });
   }
 
-  async finish() {
-    await this._closeCurrentLog();
+  finish() {
+    return this._enqueue(() => this._closeCurrentLog());
+  }
+
+  _enqueue(fn) {
+    const run = this._queue.then(fn);
+    // 1件のエラーでキュー全体が止まらないよう、チェーンに伝播する失敗はここで吸収する
+    // （呼び出し元へはrunそのものを返すのでエラーは呼び出し元にも伝わる）。
+    this._queue = run.catch(() => {});
+    return run;
   }
 
   async _openLog(phase) {
