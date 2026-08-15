@@ -2,8 +2,8 @@
 import * as db from './db.js';
 import { formatMs } from './timer.js';
 import { computeCompletionRate } from './checklistManager.js';
-import { analyzeSession, analyzeTrend } from './reflectionEngine.js';
-import { buildMinutes, exportMarkdown } from './minutesGenerator.js';
+import { CC_CL_PROMPT } from './promptReference.js';
+import { saveBlob } from './fileSave.js';
 
 export function progressColorClass(ratio) {
   if (ratio === null || ratio === undefined) return '';
@@ -22,23 +22,58 @@ function aggregatePhaseActuals(phaseLogs) {
   return map;
 }
 
-export async function renderSessionSummary(container, sessionId, opts = {}) {
-  const [{ session, phaseConfig, checklistConfig }, phaseLogs, checklistEvents, notes, insights, trends] = await Promise.all([
-    db.getSessionConfig(sessionId),
-    db.listPhaseLogs(sessionId),
-    db.listChecklistEvents(sessionId),
-    db.listNotes(sessionId),
-    analyzeSession(sessionId),
-    analyzeTrend(sessionId),
-  ]);
+function formatDateTime(ts) {
+  const d = new Date(ts);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
+function formatDateTimeForFile(ts) {
+  const d = new Date(ts);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+}
+
+function buildSummaryText({ session, phaseConfig, checklistConfig, phaseLogs, checklistEvents, notes }) {
   const actuals = aggregatePhaseActuals(phaseLogs);
-  container.innerHTML = '';
+  const lines = [];
+  lines.push('面談結果概要');
+  lines.push('');
+  lines.push(`面談日時: ${formatDateTime(session.startedAt)}`);
+  lines.push(`面談時間: ${formatMs(session.totalDurationMs || 0)}`);
+  lines.push('');
+  lines.push('【フェーズ別時間配分】');
+  for (const phase of phaseConfig) {
+    const agg = actuals.get(phase.key);
+    const targetMs = phase.targetMinutes * 60 * 1000;
+    const actualMs = agg ? agg.actualDurationMs : 0;
+    const ratio = targetMs > 0 ? actualMs / targetMs : null;
+    const comp = computeCompletionRate(checklistConfig, checklistEvents, phase.key);
+    const ratioText = ratio !== null ? `${Math.round(ratio * 100)}%` : '-';
+    lines.push(`${phase.label} / 目標${phase.targetMinutes}分 / 実績${formatMs(actualMs)} / 差分${ratioText} / チェック${comp.checked}/${comp.total}`);
+  }
+  lines.push('');
+  lines.push('【メモ】');
+  if (notes.length === 0) {
+    lines.push('(記録されたメモはありません)');
+  } else {
+    for (const n of notes) {
+      const phaseLabel = (phaseConfig.find((p) => p.key === n.phaseKey) || {}).label || n.phaseKey;
+      lines.push(`[${formatMs(n.elapsedMsTotal)} / ${phaseLabel}] ${n.text}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+function buildSummaryPanel({ session, phaseConfig, checklistConfig, phaseLogs, checklistEvents, notes }) {
+  const actuals = aggregatePhaseActuals(phaseLogs);
+  const panel = document.createElement('div');
+  panel.className = 'tab-panel';
 
   const header = document.createElement('div');
   header.className = 'summary-header';
   header.innerHTML = `<p>面談時間: <strong>${formatMs(session.totalDurationMs || 0)}</strong></p>`;
-  container.appendChild(header);
+  panel.appendChild(header);
 
   const table = document.createElement('table');
   table.className = 'summary-table';
@@ -61,24 +96,7 @@ export async function renderSessionSummary(container, sessionId, opts = {}) {
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
-  container.appendChild(table);
-
-  if (insights.length > 0 || trends.length > 0) {
-    const insightsBox = document.createElement('div');
-    insightsBox.className = 'insights-box';
-    const h = document.createElement('h4');
-    h.textContent = '振り返りインサイト';
-    insightsBox.appendChild(h);
-    const ul = document.createElement('ul');
-    [...insights, ...trends].forEach((i) => {
-      const li = document.createElement('li');
-      li.className = `insight-${i.severity}`;
-      li.textContent = i.text;
-      ul.appendChild(li);
-    });
-    insightsBox.appendChild(ul);
-    container.appendChild(insightsBox);
-  }
+  panel.appendChild(table);
 
   if (notes.length > 0) {
     const notesBox = document.createElement('div');
@@ -94,37 +112,93 @@ export async function renderSessionSummary(container, sessionId, opts = {}) {
       ul.appendChild(li);
     });
     notesBox.appendChild(ul);
-    container.appendChild(notesBox);
+    panel.appendChild(notesBox);
   }
 
   const actions = document.createElement('div');
-  actions.className = 'summary-actions';
-
-  const minutesBtn = document.createElement('button');
-  minutesBtn.type = 'button';
-  minutesBtn.className = 'btn-primary';
-  minutesBtn.textContent = '議事録ドラフトを生成';
-  const minutesPreview = document.createElement('pre');
-  minutesPreview.className = 'minutes-preview';
-  minutesBtn.addEventListener('click', async () => {
-    const md = await buildMinutes(sessionId);
-    minutesPreview.textContent = md;
-    minutesPreview.style.display = 'block';
-    downloadBtn.style.display = 'inline-block';
-    downloadBtn.dataset.md = md;
+  actions.className = 'tab-actions';
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.className = 'btn-secondary';
+  saveBtn.textContent = '面談結果概要ダウンロード（.txt）';
+  saveBtn.addEventListener('click', async () => {
+    const text = buildSummaryText({ session, phaseConfig, checklistConfig, phaseLogs, checklistEvents, notes });
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    await saveBlob(blob, `mendan-kekka-gaiyou-${formatDateTimeForFile(session.startedAt)}.txt`, { 'text/plain': ['.txt'] });
   });
-  actions.appendChild(minutesBtn);
+  actions.appendChild(saveBtn);
+  panel.appendChild(actions);
 
-  const downloadBtn = document.createElement('button');
-  downloadBtn.type = 'button';
-  downloadBtn.className = 'btn-secondary';
-  downloadBtn.textContent = '議事録をダウンロード（.md）';
-  downloadBtn.style.display = 'none';
-  downloadBtn.addEventListener('click', async () => {
-    await exportMarkdown(sessionId, downloadBtn.dataset.md);
+  return panel;
+}
+
+function buildResultPanel() {
+  const panel = document.createElement('div');
+  panel.className = 'tab-panel';
+  panel.hidden = true;
+
+  const intro = document.createElement('p');
+  intro.className = 'hint';
+  intro.textContent = 'このアプリは音声の文字起こし・話者分離を行いません。別途取得した文字起こしテキストと、以下のプロンプトをAI(Claude等)に渡すことで、CC/CL発言を1分刻みで整理できます。';
+  panel.appendChild(intro);
+
+  const promptPre = document.createElement('pre');
+  promptPre.className = 'prompt-reference';
+  promptPre.textContent = CC_CL_PROMPT;
+  panel.appendChild(promptPre);
+
+  const actions = document.createElement('div');
+  actions.className = 'tab-actions';
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.className = 'btn-secondary';
+  saveBtn.textContent = '逐語プロンプトをテキストで保存（.txt）';
+  saveBtn.addEventListener('click', async () => {
+    const blob = new Blob([CC_CL_PROMPT], { type: 'text/plain;charset=utf-8' });
+    await saveBlob(blob, '逐語プロンプト_参考.txt', { 'text/plain': ['.txt'] });
   });
-  actions.appendChild(downloadBtn);
+  actions.appendChild(saveBtn);
+  panel.appendChild(actions);
 
-  container.appendChild(actions);
-  container.appendChild(minutesPreview);
+  return panel;
+}
+
+export async function renderSessionSummary(container, sessionId, opts = {}) {
+  const [{ session, phaseConfig, checklistConfig }, phaseLogs, checklistEvents, notes] = await Promise.all([
+    db.getSessionConfig(sessionId),
+    db.listPhaseLogs(sessionId),
+    db.listChecklistEvents(sessionId),
+    db.listNotes(sessionId),
+  ]);
+
+  container.innerHTML = '';
+
+  const summaryPanel = buildSummaryPanel({ session, phaseConfig, checklistConfig, phaseLogs, checklistEvents, notes });
+  const resultPanel = buildResultPanel();
+
+  const tabs = document.createElement('div');
+  tabs.className = 'summary-tabs';
+  const summaryTabBtn = document.createElement('button');
+  summaryTabBtn.type = 'button';
+  summaryTabBtn.className = 'tab-btn active';
+  summaryTabBtn.textContent = '面談結果概要';
+  const resultTabBtn = document.createElement('button');
+  resultTabBtn.type = 'button';
+  resultTabBtn.className = 'tab-btn';
+  resultTabBtn.textContent = '逐語プロンプト（参考）';
+  tabs.appendChild(summaryTabBtn);
+  tabs.appendChild(resultTabBtn);
+
+  function activateTab(name) {
+    summaryTabBtn.classList.toggle('active', name === 'summary');
+    resultTabBtn.classList.toggle('active', name === 'result');
+    summaryPanel.hidden = name !== 'summary';
+    resultPanel.hidden = name !== 'result';
+  }
+  summaryTabBtn.addEventListener('click', () => activateTab('summary'));
+  resultTabBtn.addEventListener('click', () => activateTab('result'));
+
+  container.appendChild(tabs);
+  container.appendChild(summaryPanel);
+  container.appendChild(resultPanel);
 }

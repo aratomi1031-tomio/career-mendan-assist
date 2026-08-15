@@ -27,8 +27,3 @@ export async function saveBlob(blob, suggestedName, acceptTypes) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
   return { method: 'download', fileName: suggestedName };
 }
-
-export async function saveTextFile(text, suggestedName) {
-  const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
-  return saveBlob(blob, suggestedName, { 'text/markdown': ['.md'] });
-}

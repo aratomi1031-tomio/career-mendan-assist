@@ -111,7 +111,7 @@ async function startSession() {
     recordingSaved: false,
     recordingSavedFileName: null,
     // このセッション実施当時のフェーズ・チェックリスト構成を保存しておく。
-    // 後で設定画面を変更しても、このセッションの履歴・議事録・振り返りの内容は変わらない。
+    // 後で設定画面を変更しても、このセッションの履歴・面談結果概要の内容は変わらない。
     phaseConfigSnapshot: phaseConfig,
     checklistConfigSnapshot: checklistConfig,
   });
